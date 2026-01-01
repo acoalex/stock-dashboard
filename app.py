@@ -159,7 +159,10 @@ if st.session_state.get('authentication_status'):
         selected_period = period_options[selected_period_label]
 
 
+    # Cacheamos los datos por 5 minutos (300 segundos) para evitar recargas lentas
+    @st.cache_data(ttl=300, show_spinner=False)
     def get_stock_data(ticker_symbol, period):
+        """Descarga datos de yahoo finance con caché"""
         stock = yf.Ticker(ticker_symbol)
         hist = stock.history(period=period)
         info = stock.info
