@@ -1,0 +1,9 @@
+streamlit
+yfinance
+plotly
+pandas
+streamlit-authenticator
+openai
+streamlit-autorefresh
+python-dotenv
+streamlit-searchbox
