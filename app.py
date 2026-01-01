@@ -10,8 +10,6 @@ from dotenv import load_dotenv
 import os
 import requests
 
-from streamlit_searchbox import st_searchbox
-
 # Cargar variables de entorno
 load_dotenv()
 
@@ -19,13 +17,38 @@ load_dotenv()
 st.set_page_config(page_title="Dashboard Financiero", layout="wide")
 
 # --- Configuración Dinámica desde .env ---
-# ... (resto de la configuración igual)
+config = {
+    'credentials': {
+        'usernames': {
+            os.getenv('STOCK_USERNAME', 'admin'): {
+                'email': os.getenv('STOCK_EMAIL', 'admin@example.com'),
+                'name': os.getenv('STOCK_NAME', 'Admin'),
+                'password': os.getenv('STOCK_PASSWORD_HASH') 
+            }
+        }
+    },
+    'cookie': {
+        'name': os.getenv('COOKIE_NAME', 'stock_dashboard_cookie'),
+        'key': os.getenv('COOKIE_KEY', 'default_secret_key'),
+        'expiry_days': 30
+    }
+}
 
 # --- Autenticación ---
-# ...
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days']
+)
 
-if st.session_state['authentication_status']:
-    # ... UI Principal ...
+try:
+    authenticator.login()
+except Exception as e:
+    st.error(e)
+
+if st.session_state.get('authentication_status'):
+    # --- UI Principal (Solo visible si logueado) ---
     
     # Botón de Logout
     with st.sidebar:
@@ -57,7 +80,7 @@ if st.session_state['authentication_status']:
     if 'tickers' not in st.session_state:
         st.session_state['tickers'] = ["GOOGL", "NVDA", "TSM", "ORCL", "ACMR", "RNMBF", "BAYN.DE", "EOAN.DE"]
 
-    # Función de búsqueda adaptada para st_searchbox
+    # Función de búsqueda nativa
     def search_symbols_realtime(search_query: str):
         if not search_query or len(search_query) < 2:
             return []
@@ -74,26 +97,32 @@ if st.session_state['authentication_status']:
             pass
         return []
 
-    # 1. Sección: Añadir Nueva Acción (AHORA ARRIBA)
+    # 1. Sección: Añadir Nueva Acción (Nativo y Estable)
     st.sidebar.subheader("🔍 Añadir Acción")
-    selected_symbol = st_searchbox(
-        search_symbols_realtime,
-        placeholder="Empieza a escribir (ej. Apple)...",
-        key="stock_search",
-        clear_on_submit=True,
-    )
+    st.sidebar.caption("Escribe y pulsa Enter para buscar:")
     
-    if selected_symbol:
-        if selected_symbol not in st.session_state['tickers']:
-            st.session_state['tickers'].append(selected_symbol)
-            st.success(f"Añadido {selected_symbol}")
-            st.rerun()
+    search_query = st.sidebar.text_input("Buscar...", key="native_search_input", placeholder="Ej: Apple")
+
+    if search_query and len(search_query) >= 2:
+        results = search_symbols_realtime(search_query)
+        
+        if not results:
+            st.sidebar.caption("No se encontraron resultados.")
         else:
-            st.sidebar.warning("Ya está en tu lista.")
+            st.sidebar.markdown("**Resultados:**")
+            for label, symbol in results[:5]:
+                # Usamos use_container_width para que los botones se vean mejor
+                if st.sidebar.button(f"➕ {label}", key=f"add_{symbol}", use_container_width=True):
+                    if symbol not in st.session_state['tickers']:
+                        st.session_state['tickers'].append(symbol)
+                        st.success(f"Añadido: {symbol}")
+                        st.rerun()
+                    else:
+                        st.sidebar.warning("Ya está en tu lista.")
 
     st.sidebar.markdown("---")
 
-    # 2. Sección: Cartera Actual (DEBAJO)
+    # 2. Sección: Cartera Actual
     st.sidebar.subheader("💼 Tu Cartera")
     for ticker in st.session_state['tickers'][:]:
         col1, col2 = st.sidebar.columns([0.8, 0.2])
@@ -105,10 +134,15 @@ if st.session_state['authentication_status']:
     st.sidebar.markdown("---")
     
     tickers = st.session_state['tickers']
-    # ... resto del código ...
 
+    if not tickers:
+        st.warning("Tu cartera está vacía. Añade acciones desde la barra lateral.")
+        st.stop()
+        
+    st.sidebar.write(f"Monitorizando **{len(tickers)}** activos.")
+
+    # --- Lógica Principal ---
     
-    # Selector de Periodo
     period_options = {
         "1 Mes": "1mo",
         "3 Meses": "3mo",
@@ -119,7 +153,6 @@ if st.session_state['authentication_status']:
         "Todo el historial": "max"
     }
     
-    # Creamos columnas para organizar mejor la cabecera
     col_header, col_period = st.columns([3, 1])
     with col_period:
         selected_period_label = st.selectbox("Rango de tiempo:", list(period_options.keys()), index=3)
@@ -127,7 +160,6 @@ if st.session_state['authentication_status']:
 
 
     def get_stock_data(ticker_symbol, period):
-        """Descarga datos de yahoo finance"""
         stock = yf.Ticker(ticker_symbol)
         hist = stock.history(period=period)
         info = stock.info
@@ -135,9 +167,7 @@ if st.session_state['authentication_status']:
         return hist, info, news
 
     def analyze_stock_with_ai(ticker, hist_data, news_data):
-        """Consulta al modelo LLM para un análisis incluyendo noticias"""
         try:
-            # Obtener credenciales de entorno
             api_key = os.getenv('LLM_API_KEY')
             base_url = os.getenv('LLM_BASE_URL')
             model_name = os.getenv('LLM_MODEL')
@@ -145,18 +175,12 @@ if st.session_state['authentication_status']:
             if not api_key:
                 return "Error: No se ha configurado la API Key del LLM en el archivo .env"
 
-            # Preparar cliente OpenAI
-            client = OpenAI(
-                api_key=api_key,
-                base_url=base_url
-            )
+            client = OpenAI(api_key=api_key, base_url=base_url)
             
-            # 1. Resumen de datos técnicos
             recent_data = hist_data.tail(30).copy()
             recent_data['Change'] = recent_data['Close'].pct_change() * 100
             data_summary = recent_data[['Close', 'Change']].to_string()
 
-            # 2. Resumen de noticias (Últimas 3)
             news_summary = ""
             if news_data:
                 for n in news_data[:3]:
@@ -203,29 +227,22 @@ if st.session_state['authentication_status']:
         except Exception as e:
             return f"Error al consultar la IA: {str(e)}"
 
-    # Contenedor para mensajes de carga
     with st.spinner('Cargando datos del mercado...'):
-        
         st.subheader(f"Resumen de Mercado ({selected_period_label})")
         
-        # 1. Sección de Métricas Generales (Tarjetas)
         valid_tickers = []
         columns_per_row = 4
-        
-        # Inicializar la primera fila de columnas
         current_cols = st.columns(columns_per_row)
         
         for i, ticker in enumerate(tickers):
-            # Si completamos una fila (y no es el primer elemento), creamos una nueva fila de columnas
             if i > 0 and i % columns_per_row == 0:
                 current_cols = st.columns(columns_per_row)
             
-            # Seleccionar la columna correspondiente
             col_index = i % columns_per_row
             
             with current_cols[col_index]:
                 try:
-                    hist, info, _ = get_stock_data(ticker, "5d") # Solo datos recientes para la tarjeta
+                    hist, info, _ = get_stock_data(ticker, "5d")
                     if hist.empty:
                         st.error(f"{ticker}: Sin datos")
                         continue
@@ -245,16 +262,12 @@ if st.session_state['authentication_status']:
                         delta=f"{delta:.2f} ({delta_percent:.2f}%)"
                     )
                     valid_tickers.append(ticker)
-                    
                 except Exception as e:
                     st.error(f"Error {ticker}")
 
         st.markdown("---")
-        
-        # 2. Sección Detallada por Acción (Gráficos)
         st.subheader("📊 Análisis Individual y Progresión")
         
-        # Leyenda de Colores
         st.markdown("""
         <div style="background-color: #262730; padding: 10px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #444;">
             <h5 style="margin:0; margin-bottom:5px;">ℹ️ Leyenda del Gráfico</h5>
@@ -264,9 +277,7 @@ if st.session_state['authentication_status']:
         """, unsafe_allow_html=True)
         
         for ticker in valid_tickers:
-            # Recuperar historial completo y noticias
             hist, info, news = get_stock_data(ticker, selected_period)
-            
             if hist.empty:
                 continue
             
@@ -275,13 +286,10 @@ if st.session_state['authentication_status']:
             symbol = "€" if currency == "EUR" else "$"
             
             with st.expander(f"Detalles de {ticker} - {short_name}", expanded=True):
-                # Calcular cambio porcentual diario para el tooltip
                 hist['Daily_Change_Pct'] = hist['Close'].pct_change() * 100
                 hist['Daily_Change_Pct'] = hist['Daily_Change_Pct'].fillna(0)
 
-                # Crear gráfico interactivo
                 fig = go.Figure()
-                
                 fig.add_trace(go.Candlestick(
                     x=hist.index,
                     open=hist['Open'],
@@ -308,27 +316,23 @@ if st.session_state['authentication_status']:
                     template="plotly_dark",
                     xaxis_rangeslider_visible=False 
                 )
-                
                 st.plotly_chart(fig, use_container_width=True)
                 
                 col_table, col_ai = st.columns([1, 1])
-                
                 with col_table:
                     if st.checkbox(f"Ver datos de tabla para {ticker}", key=f"check_{ticker}"):
                         st.dataframe(hist.sort_index(ascending=False).head(10))
-                
                 with col_ai:
                     st.markdown("#### 🧠 Inteligencia Artificial")
                     st.caption("Analiza tendencias de precio y noticias recientes.")
                     if st.button(f"🤖 Analizar {ticker} con IA", key=f"btn_{ticker}"):
-                        with st.spinner(f"Leyendo noticias y consultando a {config['llm']['model']}..."):
+                        with st.spinner(f"Leyendo noticias y consultando a {os.getenv('LLM_MODEL')}:"):
                             analysis = analyze_stock_with_ai(ticker, hist, news)
                             with st.expander("📝 Ver Análisis de la IA", expanded=True):
                                 st.info(analysis)
-
     st.success("Actualización completada.")
 
-elif st.session_state['authentication_status'] is False:
+elif st.session_state.get('authentication_status') is False:
     st.error('Usuario o contraseña incorrectos')
-elif st.session_state['authentication_status'] is None:
+elif st.session_state.get('authentication_status') is None:
     st.warning('Por favor ingresa tu usuario y contraseña')
