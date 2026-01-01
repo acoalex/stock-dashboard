@@ -39,7 +39,7 @@ COOKIE_NAME=stock_dashboard_cookie
 
 # --- Configuración de Inteligencia Artificial (LLM) ---
 LLM_API_KEY=tu_api_key_aqui
-LLM_BASE_URL=https://modelhub.acoalex.com/v1
+LLM_BASE_URL=https://modelhub.example.com/v1
 LLM_MODEL=openai/gpt-oss-120b:free
 ```
 
