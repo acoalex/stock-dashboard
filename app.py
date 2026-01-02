@@ -3,57 +3,143 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-import streamlit_authenticator as stauth
 from openai import OpenAI
 from streamlit_autorefresh import st_autorefresh
+from streamlit_oauth import OAuth2Component
 from dotenv import load_dotenv
 import os
 import requests
+import base64
+import json
 
-# Cargar variables de entorno
+# Load environment variables
 load_dotenv(override=True)
 
-# Configuración de la página
+# Page configuration
 st.set_page_config(page_title="Dashboard Financiero", layout="wide")
 
-# --- Configuración Dinámica desde .env ---
-config = {
-    'credentials': {
-        'usernames': {
-            os.getenv('STOCK_USERNAME', 'admin'): {
-                'email': os.getenv('STOCK_EMAIL', 'admin@example.com'),
-                'name': os.getenv('STOCK_NAME', 'Admin'),
-                'password': os.getenv('STOCK_PASSWORD_HASH') 
-            }
-        }
-    },
-    'cookie': {
-        'name': os.getenv('COOKIE_NAME', 'stock_dashboard_cookie'),
-        'key': os.getenv('COOKIE_KEY', 'default_secret_key'),
-        'expiry_days': 30
-    }
-}
+# --- Keycloak OIDC Configuration ---
+KEYCLOAK_URL = os.getenv('KEYCLOAK_URL', 'https://auth.acoalex.com')
+KEYCLOAK_REALM = os.getenv('KEYCLOAK_REALM', 'master')
+KEYCLOAK_CLIENT_ID = os.getenv('KEYCLOAK_CLIENT_ID', '')
+KEYCLOAK_CLIENT_SECRET = os.getenv('KEYCLOAK_CLIENT_SECRET', '')
 
-# --- Autenticación ---
-authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
+AUTHORIZE_ENDPOINT = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/auth"
+TOKEN_ENDPOINT = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
+LOGOUT_ENDPOINT = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout"
+
+# Required role to access the application
+REQUIRED_ROLE = os.getenv('REQUIRED_ROLE', 'stock-user')
+
+
+def decode_jwt_payload(token: str) -> dict:
+    """Decode the payload of a JWT token without verifying the signature."""
+    try:
+        payload_b64 = token.split('.')[1]
+        # Add padding if needed
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += '=' * padding
+        payload_json = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_json)
+    except Exception:
+        return {}
+
+
+def get_user_info_from_token(token: str) -> dict:
+    """Extract user information from the ID token."""
+    payload = decode_jwt_payload(token)
+    return {
+        'name': payload.get('name', payload.get('preferred_username', 'Usuario')),
+        'email': payload.get('email', ''),
+        'username': payload.get('preferred_username', ''),
+    }
+
+
+def get_user_roles(token: str, client_id: str) -> list:
+    """Extract user roles from the access token."""
+    payload = decode_jwt_payload(token)
+    # Client roles are in resource_access.{client_id}.roles
+    client_roles = payload.get('resource_access', {}).get(client_id, {}).get('roles', [])
+    # Realm roles are in realm_access.roles
+    realm_roles = payload.get('realm_access', {}).get('roles', [])
+    return client_roles + realm_roles
+
+
+def has_required_role(token: str, client_id: str, required_role: str) -> bool:
+    """Check if user has the required role."""
+    roles = get_user_roles(token, client_id)
+    return required_role in roles
+
+
+# --- Authentication with Keycloak ---
+oauth2 = OAuth2Component(
+    client_id=KEYCLOAK_CLIENT_ID,
+    client_secret=KEYCLOAK_CLIENT_SECRET,
+    authorize_endpoint=AUTHORIZE_ENDPOINT,
+    token_endpoint=TOKEN_ENDPOINT,
 )
 
-try:
-    authenticator.login()
-except Exception as e:
-    st.error(e)
-
-if st.session_state.get('authentication_status'):
-    # --- UI Principal (Solo visible si logueado) ---
+# Check if user is authenticated
+if 'token' not in st.session_state:
+    st.title("📈 Dashboard de Acciones")
+    st.info("Por favor, inicia sesión para acceder al dashboard.")
     
-    # Botón de Logout
+    result = oauth2.authorize_button(
+        name="Iniciar Sesión con Keycloak",
+        redirect_uri=os.getenv('REDIRECT_URI', 'http://localhost:8501'),
+        scope="openid profile email",
+        key="keycloak_login",
+        use_container_width=True,
+    )
+    
+    if result and 'token' in result:
+        st.session_state['token'] = result['token']
+        id_token = result['token'].get('id_token', '')
+        st.session_state['user_info'] = get_user_info_from_token(id_token)
+        st.rerun()
+    
+    st.stop()
+
+# User is authenticated
+user_info = st.session_state.get('user_info', {'name': 'Usuario'})
+access_token = st.session_state.get('token', {}).get('access_token', '')
+
+# Verify user has required role
+if not has_required_role(access_token, KEYCLOAK_CLIENT_ID, REQUIRED_ROLE):
+    st.title("⛔ Acceso Denegado")
+    st.error(f"No tienes permisos para acceder a esta aplicación. Se requiere el rol: **{REQUIRED_ROLE}**")
+    st.info(f"Usuario: {user_info.get('name', 'Desconocido')} ({user_info.get('email', '')})")
+    
+    if st.button('Cerrar Sesión', key='logout_no_role'):
+        id_token = st.session_state.get('token', {}).get('id_token', '')
+        redirect_uri = os.getenv('REDIRECT_URI', 'http://localhost:8501')
+        logout_url = f"{LOGOUT_ENDPOINT}?id_token_hint={id_token}&post_logout_redirect_uri={redirect_uri}"
+        del st.session_state['token']
+        if 'user_info' in st.session_state:
+            del st.session_state['user_info']
+        st.markdown(f'<meta http-equiv="refresh" content="0;url={logout_url}">', unsafe_allow_html=True)
+        st.stop()
+    
+    st.caption("Contacta con el administrador si crees que deberías tener acceso.")
+    st.stop()
+
+if st.session_state.get('token'):
+    # --- Main UI (Only visible when logged in) ---
+    
+    # Logout button
     with st.sidebar:
-        st.write(f"Bienvenido, *{st.session_state['name']}*")
-        authenticator.logout('Cerrar Sesión', 'sidebar')
+        st.write(f"Bienvenido, *{user_info.get('name', 'Usuario')}*")
+        if st.button('Cerrar Sesión', key='logout_btn'):
+            # Clear session and redirect to Keycloak logout
+            id_token = st.session_state.get('token', {}).get('id_token', '')
+            redirect_uri = os.getenv('REDIRECT_URI', 'http://localhost:8501')
+            logout_url = f"{LOGOUT_ENDPOINT}?id_token_hint={id_token}&post_logout_redirect_uri={redirect_uri}"
+            del st.session_state['token']
+            if 'user_info' in st.session_state:
+                del st.session_state['user_info']
+            st.markdown(f'<meta http-equiv="refresh" content="0;url={logout_url}">', unsafe_allow_html=True)
+            st.stop()
         st.divider()
 
     st.title("📈 Dashboard de Acciones Interactivo")
@@ -334,8 +420,3 @@ if st.session_state.get('authentication_status'):
                             with st.expander("📝 Ver Análisis de la IA", expanded=True):
                                 st.info(analysis)
     st.success("Actualización completada.")
-
-elif st.session_state.get('authentication_status') is False:
-    st.error('Usuario o contraseña incorrectos')
-elif st.session_state.get('authentication_status') is None:
-    st.warning('Por favor ingresa tu usuario y contraseña')

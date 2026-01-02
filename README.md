@@ -4,7 +4,7 @@ Dashboard financiero profesional e interactivo construido con **Python** y **Str
 
 ## 🚀 Características Principales
 
-*   **🔐 Seguridad Robusta**: Sistema de login protegido con hash de contraseñas y gestión de sesiones.
+*   **🔐 Seguridad Robusta**: Autenticación integrada con Keycloak (OIDC/OAuth2) para gestión centralizada de usuarios.
 *   **🤖 Análisis con IA**: Integración con LLMs (OpenAI/ModelHub) para analizar tendencias y noticias recientes, ofreciendo recomendaciones de compra/venta/mantenimiento.
 *   **🔍 Búsqueda Inteligente**: Buscador predictivo en tiempo real conectado a la API de Yahoo Finance para añadir acciones instantáneamente.
 *   **📊 Gráficos Avanzados**: Gráficos de velas (Candlestick) interactivos con detección automática de divisa (€/$) y tooltips detallados.
@@ -17,7 +17,7 @@ Dashboard financiero profesional e interactivo construido con **Python** y **Str
 *   **Frontend**: Streamlit, Plotly.
 *   **Datos**: yfinance (Yahoo Finance API).
 *   **IA/LLM**: OpenAI Client (compatible con cualquier endpoint estándar).
-*   **Seguridad**: python-dotenv, streamlit-authenticator.
+*   **Seguridad**: python-dotenv, streamlit-oauth (Keycloak OIDC).
 
 ---
 
@@ -26,22 +26,49 @@ Dashboard financiero profesional e interactivo construido con **Python** y **Str
 El proyecto utiliza variables de entorno para proteger la información sensible. **Antes de arrancar**, debes crear un archivo `.env` en la raíz del proyecto basado en el siguiente ejemplo:
 
 ```ini
-# --- Credenciales de Acceso al Dashboard ---
-STOCK_USERNAME=admin
-STOCK_NAME=Administrador
-STOCK_EMAIL=admin@example.com
-# Generar hash con: from streamlit_authenticator.utilities.hasher import Hasher; Hasher.hash('tu_password')
-STOCK_PASSWORD_HASH=$2b$12$EjemploDeHashGenerado...
+# --- Keycloak Authentication (OIDC) ---
+KEYCLOAK_URL=https://auth.example.com
+KEYCLOAK_REALM=your-realm-name
+KEYCLOAK_CLIENT_ID=stock-dashboard
+KEYCLOAK_CLIENT_SECRET=your-client-secret-here
 
-# --- Seguridad de Cookies ---
-COOKIE_KEY=clave_secreta_larga_y_aleatoria
-COOKIE_NAME=stock_dashboard_cookie
+# --- Redirect URI (must match Keycloak client configuration) ---
+# Local development:
+REDIRECT_URI=http://localhost:8501
+# Production:
+# REDIRECT_URI=https://stock.example.com
 
-# --- Configuración de Inteligencia Artificial (LLM) ---
+# --- Role required to access the application ---
+REQUIRED_ROLE=stock-user
+
+# --- AI/LLM Configuration ---
 LLM_API_KEY=tu_api_key_aqui
 LLM_BASE_URL=https://modelhub.example.com/v1
 LLM_MODEL=openai/gpt-oss-120b:free
 ```
+
+### Keycloak Client Setup
+
+1. Create a new client in your Keycloak realm with these settings:
+   - **Client ID**: `stock-dashboard`
+   - **Access Type**: `confidential`
+   - **Standard Flow Enabled**: `ON`
+   - **Root URL**: `https://stock.example.com`
+   - **Valid Redirect URIs**: `https://stock.example.com/*`
+   - **Valid Post Logout Redirect URIs**: `https://stock.example.com/*`
+   - **Web Origins**: `https://stock.example.com`
+
+2. Copy the **Client Secret** from the Credentials tab to your `.env` file.
+
+3. Create a role for authorized users:
+   - Go to your Client → **Roles** tab → **Create role**
+   - **Role name**: `stock-user`
+   - Save the role
+
+4. Assign the role to users:
+   - Go to **Users** → select a user → **Role Mappings** tab
+   - In **Client Roles**, select your client (`stock-dashboard`)
+   - Add the `stock-user` role to the user
 
 ---
 
