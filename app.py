@@ -11,7 +11,7 @@ import os
 import requests
 
 # Cargar variables de entorno
-load_dotenv()
+load_dotenv(override=True)
 
 # Configuración de la página
 st.set_page_config(page_title="Dashboard Financiero", layout="wide")
