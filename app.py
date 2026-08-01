@@ -164,7 +164,7 @@ if st.session_state.get('token'):
     # --- Gestión de Tickers (Estado y Búsqueda) ---
     
     if 'tickers' not in st.session_state:
-        st.session_state['tickers'] = ["GOOGL", "NVDA", "TSM", "ORCL", "ACMR", "RNMBF", "BAYN.DE", "EOAN.DE"]
+        st.session_state['tickers'] = ["GOOGL", "NVDA", "TSM", "ORCL", "ACMR", "RNMBF", "BAYN.DE", "EOAN.DE", "LLY", "INGR"]
 
     # Función de búsqueda nativa
     def search_symbols_realtime(search_query: str):
